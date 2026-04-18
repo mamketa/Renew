@@ -1,0 +1,123 @@
+name: Velfox Compiler
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build.yml"
+      - ".github/scripts/**"
+      - "daemon/**"
+      - "scripts/**"
+      - "module/**"
+      - "profiler/**"
+      - "webui/**"
+      - "gamelist.txt"
+      - "version"
+
+# Prevent parallel builds
+concurrency:
+  group: build
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Flashable Zip
+    runs-on: ubuntu-latest
+
+    steps:
+      #
+      # Checkout Repository
+      #
+      - name: Checkout Source
+        uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+
+      #
+      # Toolchain Setup
+      #
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1.5.0
+        with:
+          ndk-version: r29
+
+      - name: Setup Bun Runtime
+        uses: oven-sh/setup-bun@v2.0.2
+
+      #
+      # Native Builds
+      #
+      - name: Build Velfox Daemon
+        shell: bash
+        run: |
+          set -e
+          ndk-build NDK_PROJECT_PATH=./daemon -j"$(nproc)"
+
+      - name: Build Velfox Profiler
+        shell: bash
+        run: |
+          set -e
+          ndk-build NDK_PROJECT_PATH=./profiler -j"$(nproc)"
+
+      #
+      # WebUI Build
+      #
+      - name: Build Velfox WebUI
+        working-directory: ./webui
+        shell: bash
+        run: |
+          set -e
+          bun install
+          bun run build
+          cp -r ./dist/* ../module/webroot
+
+      #
+      # Compile Flashable ZIP
+      #
+      - name: Compile Flashable Zip
+        id: compileZip
+        shell: bash
+        run: |
+          set -e
+          bash .github/scripts/compile_zip.sh
+
+      #
+      # Upload Artifact
+      #
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: velfox-build
+          path: ${{ steps.compileZip.outputs.zipName }}
+
+      #
+      # Telegram Upload
+      #
+      - name: Upload To Telegram
+        shell: bash
+        env:
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          COMMIT_URL: ${{ github.event.head_commit.url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TITLE: Velfox Tweaks
+        run: |
+          set -e
+
+          if [[ -n "${CHAT_ID:-}" && -n "${BOT_TOKEN:-}" ]]; then
+            export VERSION="$(git rev-list --count HEAD)"
+            bash .github/scripts/telegram_bot.sh "${{ steps.compileZip.outputs.zipName }}"
+          else
+            echo "Telegram BOT_TOKEN or CHAT_ID is undefined. Please configure repository secrets."
+            exit 1
+          fi
+          
