@@ -2,10 +2,12 @@
 #include "FileIO.hpp"
 #include "CpuFreq.hpp"
 #include "DevFreq.hpp"
+#include <dirent.h>
 #include <cstdio>
 #include <cstring>
 #include <climits>
 #include <format>
+#include <sys/types.h>
 
 namespace velfox {
 
