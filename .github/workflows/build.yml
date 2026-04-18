@@ -37,20 +37,21 @@ jobs:
       # Checkout Repository
       #
       - name: Checkout Source
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          submodules: true
 
       #
       # Toolchain Setup
       #
       - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1.5.0
+        uses: nttld/setup-ndk@v1
         with:
           ndk-version: r29
 
       - name: Setup Bun Runtime
-        uses: oven-sh/setup-bun@v2.0.2
+        uses: oven-sh/setup-bun@v2
 
       #
       # Native Builds
@@ -93,7 +94,7 @@ jobs:
       # Upload Artifact
       #
       - name: Upload Build Artifact
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v6
         with:
           name: velfox-build
           path: ${{ steps.compileZip.outputs.zipName }}
