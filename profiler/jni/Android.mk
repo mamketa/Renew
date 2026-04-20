@@ -1,14 +1,18 @@
 LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
+LOCAL_MODULE      := velfox_profiler
+LOCAL_MODULE_TAGS := optional
+LOCAL_MODULE_PATH := $(TARGET_OUT_EXECUTABLES)
 
-LOCAL_MODULE := velfox_profiler
 LOCAL_SRC_FILES := \
     ../main.c \
+    ../src/utility_utils.c \
     ../src/cpufreq_utils.c \
     ../src/devreq_utils.c \
+    ../src/memory_utils.c \
+    ../src/network_utils.c \
     ../src/modes_utils.c \
-    ../src/utility_utils.c \
     ../src/velfox_mediatek.c \
     ../src/velfox_snapdragon.c \
     ../src/velfox_exynos.c \
@@ -19,28 +23,31 @@ LOCAL_C_INCLUDES := $(LOCAL_PATH)/../include
 
 LOCAL_CFLAGS := \
     -O3 \
-    -std=c17 \
+    -std=c23 \
     -fPIE \
     -fPIC \
     -fvisibility=hidden \
-    -fdebug-prefix-map=$(LOCAL_PATH)=. \
-    -DNDEBUG \
-    -D_GNU_SOURCE \
-    -D_FORTIFY_SOURCE=2 \
-    -fstack-protector-strong \
     -ffunction-sections \
     -fdata-sections \
     -flto \
+    -fomit-frame-pointer \
+    -DNDEBUG \
+    -D_GNU_SOURCE \
+    -fstack-protector-strong \
     -Wall \
-    -Wextra \
-    -Wno-unused-parameter
+    -fno-plt \
+    -fmerge-all-constants \
+    -finline-functions
 
 LOCAL_LDFLAGS := \
     -flto \
     -pie \
     -Wl,--gc-sections \
     -Wl,-z,relro \
-    -Wl,-z,now
+    -Wl,-z,now \
+    -Wl,--as-needed \
+    -Wl,--strip-all \
+    -Wl,--exclude-libs,ALL
 
 LOCAL_LDLIBS += -llog
 
