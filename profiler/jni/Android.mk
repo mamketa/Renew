@@ -5,7 +5,7 @@ LOCAL_MODULE      := velfox_profiler
 LOCAL_SRC_FILES := \
     ../main.c \
     ../src/cpufreq_utils.c \
-    ../src/devreq_utils.c \
+    ../src/devfreq_utils.c \
     ../src/misc_tweaks.c \
     ../src/modes_utils.c \
     ../src/utility_utils.c \
