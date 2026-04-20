@@ -14,46 +14,28 @@
  * limitations under the License.
  */
 
-#include "modes_utils.h"
-#include <stdio.h>
-#include <stdlib.h>
+#include "velfox_modes.h"
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         printf("Usage: %s <mode>\n", argv[0]);
-        printf("  0 - Common tweaks only\n");
+        printf("Modes:\n");
+        printf("  0 - Common tweaks\n");
         printf("  1 - Esport mode\n");
         printf("  2 - Balanced mode\n");
         printf("  3 - Efficiency mode\n");
         return 1;
     }
-
     int mode = atoi(argv[1]);
-
-    /* Step 1: load configuration */
     read_configs();
-
-    /* Step 2: apply profile */
     switch (mode) {
-        case 0:
-            perfcommon();
-            break;
-        case 1:
-            perfcommon();
-            esport_mode();
-            break;
-        case 2:
-            perfcommon();
-            balanced_mode();
-            break;
-        case 3:
-            perfcommon();
-            efficiency_mode();
-            break;
+        case 0: perfcommon(); break;
+        case 1: perfcommon(); esport_mode(); break;
+        case 2: perfcommon(); balanced_mode(); break;
+        case 3: perfcommon(); efficiency_mode(); break;
         default:
             printf("Invalid mode: %d\n", mode);
             return 1;
     }
-
     return 0;
 }

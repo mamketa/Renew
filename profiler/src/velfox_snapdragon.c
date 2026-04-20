@@ -14,149 +14,72 @@
  * limitations under the License.
  */
 
-#include "soc_utils.h"
-#include "cpu_utils.h"
-#include "devfreq_utils.h"
-#include "gpu_utils.h"
-#include "utility_utils.h"
-#include "velfox_common.h"
+#include "velfox_soc.h"
+#include "velfox_devfreq.h"
 
-/* Qualcomm CPU bus/DRAM devfreq node patterns */
-static const char *const _qcom_bus_patterns[] = {
-    "cpu-lat", "cpu-bw", "llccbw", "bus_llcc",
-    "bus_ddr", "memlat", "cpubw", "kgsl-ddr-qos"
-};
-#define QCOM_BUS_PATTERN_COUNT 8
-
-/* Qualcomm bus_dcvs components */
-static const char *const _bus_dcvs_comps[] = {"DDR", "LLCC", "L3"};
-#define BUS_DCVS_COUNT 3
-
-static int _is_qcom_bus_dev(const char *name) {
-    for (int i = 0; i < QCOM_BUS_PATTERN_COUNT; i++) {
-        if (strstr(name, _qcom_bus_patterns[i])) return 1;
-    }
-    return 0;
+static bool qcom_bus_name(const char *name, void *ctx) {
+    (void)ctx;
+    return name_contains(name, "cpu-lat") || name_contains(name, "cpu-bw") || name_contains(name, "llccbw") || name_contains(name, "bus_llcc") || name_contains(name, "bus_ddr") || name_contains(name, "memlat") || name_contains(name, "cpubw") || name_contains(name, "kgsl-ddr-qos");
 }
 
-static void _adreno_common(int throttle, int adrenoboost, int force_clk, int no_nap, int bus_split) {
-    char val[4];
-    snprintf(val, sizeof(val), "%d", throttle);
-    apply(val, "/sys/class/kgsl/kgsl-3d0/throttling");
-    apply(val, "/sys/class/kgsl/kgsl-3d0/thermal_pwrlevel");
+static void qcom_bus_handler(const char *dir, const char *name, void *ctx) {
+    int mode = *(int *)ctx;
+    char path[MAX_PATH_LEN];
+    if (!path_join(path, sizeof(path), dir, name)) return;
+    if (mode == 1) LITE_MODE == 1 ? devfreq_mid_perf(path) : devfreq_max_perf(path);
+    else if (mode == 2) devfreq_unlock(path);
+    else devfreq_min_perf(path);
+}
 
-    snprintf(val, sizeof(val), "%d", adrenoboost);
-    apply(val, "/sys/class/kgsl/kgsl-3d0/devfreq/adrenoboost");
+static void qcom_bus_dcvs(int mode) {
+    const char *components[] = {"DDR", "LLCC", "L3"};
+    for (size_t i = 0; i < sizeof(components) / sizeof(components[0]); ++i) {
+        char path[MAX_PATH_LEN];
+        snprintf(path, sizeof(path), "/sys/devices/system/cpu/bus_dcvs/%s", components[i]);
+        if (mode == 1) LITE_MODE == 1 ? qcom_cpudcvs_mid_perf(path) : qcom_cpudcvs_max_perf(path);
+        else if (mode == 2) qcom_cpudcvs_unlock(path);
+        else qcom_cpudcvs_min_perf(path);
+    }
+}
 
-    snprintf(val, sizeof(val), "%d", force_clk);
-    apply(val, "/sys/class/kgsl/kgsl-3d0/force_clk_on");
+static void qcom_bw_hwmon(int mode) {
+    const char *base = "/sys/class/devfreq/soc:qcom,cpu-bw/bw_hwmon";
+    char path[MAX_PATH_LEN];
+    snprintf(path, sizeof(path), "%s/io_percent", base);
+    apply(mode == 1 ? "80" : mode == 2 ? "60" : "40", path);
+    snprintf(path, sizeof(path), "%s/sample_ms", base);
+    apply(mode == 1 ? "4" : mode == 2 ? "8" : "16", path);
+    snprintf(path, sizeof(path), "%s/hist_memory", base);
+    apply(mode == 1 ? "20" : mode == 2 ? "10" : "5", path);
+    snprintf(path, sizeof(path), "%s/decay_rate", base);
+    apply(mode == 1 ? "90" : mode == 2 ? "80" : "60", path);
+    snprintf(path, sizeof(path), "%s/bw_step", base);
+    apply(mode == 1 ? "190" : mode == 2 ? "120" : "80", path);
+}
 
-    snprintf(val, sizeof(val), "%d", no_nap);
-    apply(val, "/sys/class/kgsl/kgsl-3d0/force_no_nap");
-
-    snprintf(val, sizeof(val), "%d", bus_split);
-    apply(val, "/sys/class/kgsl/kgsl-3d0/bus_split");
-
-    /* Disable GPU perf counters in all modes */
+static void adreno(int mode) {
+    if (mode == 1) LITE_MODE == 0 ? devfreq_max_perf("/sys/class/kgsl/kgsl-3d0/devfreq") : devfreq_mid_perf("/sys/class/kgsl/kgsl-3d0/devfreq");
+    else if (mode == 2) devfreq_unlock("/sys/class/kgsl/kgsl-3d0/devfreq");
+    else devfreq_min_perf("/sys/class/kgsl/kgsl-3d0/devfreq");
+    apply(mode == 1 ? "0" : "1", "/sys/class/kgsl/kgsl-3d0/throttling");
+    apply(mode == 1 ? "0" : "1", "/sys/class/kgsl/kgsl-3d0/thermal_pwrlevel");
+    apply(mode == 1 ? "1" : "0", "/sys/class/kgsl/kgsl-3d0/devfreq/adrenoboost");
+    apply(mode == 1 ? "1" : "0", "/sys/class/kgsl/kgsl-3d0/force_bus_on");
+    apply(mode == 1 ? "1" : "0", "/sys/class/kgsl/kgsl-3d0/force_clk_on");
+    apply(mode == 1 ? "1" : "0", "/sys/class/kgsl/kgsl-3d0/force_no_nap");
+    apply(mode == 1 ? "0" : "1", "/sys/class/kgsl/kgsl-3d0/bus_split");
     apply("0", "/sys/class/kgsl/kgsl-3d0/perfcounter");
 }
 
-void snapdragon_esport(void) {
-    /* Qualcomm CPU bus and DRAM frequencies */
+static void snapdragon_mode(int mode) {
     if (DEVICE_MITIGATION == 0) {
-        DIR *dir = opendir("/sys/class/devfreq");
-        if (dir) {
-            struct dirent *ent;
-            while ((ent = readdir(dir)) != NULL) {
-                if (!_is_qcom_bus_dev(ent->d_name)) continue;
-                char path[MAX_PATH_LEN];
-                snprintf(path, sizeof(path), "/sys/class/devfreq/%s", ent->d_name);
-                if (LITE_MODE == 1)
-                    devfreq_mid_perf(path);
-                else
-                    devfreq_max_perf(path);
-            }
-            closedir(dir);
-        }
-
-        /* bus_dcvs (DDR, LLCC, L3) */
-        for (int i = 0; i < BUS_DCVS_COUNT; i++) {
-            char path[MAX_PATH_LEN];
-            snprintf(path, sizeof(path),
-                     "/sys/devices/system/cpu/bus_dcvs/%s", _bus_dcvs_comps[i]);
-            if (LITE_MODE == 1)
-                qcom_cpudcvs_mid_perf(path);
-            else
-                qcom_cpudcvs_max_perf(path);
-        }
+        for_each_dir_entry("/sys/class/devfreq", qcom_bus_name, qcom_bus_handler, &(int){mode});
+        qcom_bus_dcvs(mode);
+        qcom_bw_hwmon(mode);
     }
-
-    /* KGSL GPU frequency */
-    if (LITE_MODE == 1)
-        devfreq_mid_perf("/sys/class/kgsl/kgsl-3d0/devfreq");
-    else
-        devfreq_max_perf("/sys/class/kgsl/kgsl-3d0/devfreq");
-
-    /* Adreno: disable throttle, enable boost, keep clocks on */
-    _adreno_common(0, 1, 1, 1, 0);
+    adreno(mode);
 }
 
-void snapdragon_balanced(void) {
-    /* Unlock CPU bus devfreq */
-    if (DEVICE_MITIGATION == 0) {
-        DIR *dir = opendir("/sys/class/devfreq");
-        if (dir) {
-            struct dirent *ent;
-            while ((ent = readdir(dir)) != NULL) {
-                if (!_is_qcom_bus_dev(ent->d_name)) continue;
-                char path[MAX_PATH_LEN];
-                snprintf(path, sizeof(path), "/sys/class/devfreq/%s", ent->d_name);
-                devfreq_unlock(path);
-            }
-            closedir(dir);
-        }
-
-        for (int i = 0; i < BUS_DCVS_COUNT; i++) {
-            char path[MAX_PATH_LEN];
-            snprintf(path, sizeof(path),
-                     "/sys/devices/system/cpu/bus_dcvs/%s", _bus_dcvs_comps[i]);
-            qcom_cpudcvs_unlock(path);
-        }
-    }
-
-    /* GPU: unlock */
-    devfreq_unlock("/sys/class/kgsl/kgsl-3d0/devfreq");
-
-    /* Adreno: restore throttle, disable boost, allow nap */
-    _adreno_common(1, 0, 0, 0, 1);
-}
-
-void snapdragon_efficiency(void) {
-    /* GPU: minimum frequency */
-    devfreq_min_perf("/sys/class/kgsl/kgsl-3d0/devfreq");
-
-    /* Adreno: throttle on, no boost, allow idle */
-    _adreno_common(1, 0, 0, 0, 1);
-
-    /* Bus devfreq: evenly reduce to minimum for efficiency */
-    if (DEVICE_MITIGATION == 0) {
-        DIR *dir = opendir("/sys/class/devfreq");
-        if (dir) {
-            struct dirent *ent;
-            while ((ent = readdir(dir)) != NULL) {
-                if (!_is_qcom_bus_dev(ent->d_name)) continue;
-                char path[MAX_PATH_LEN];
-                snprintf(path, sizeof(path), "/sys/class/devfreq/%s", ent->d_name);
-                devfreq_min_perf(path);
-            }
-            closedir(dir);
-        }
-
-        for (int i = 0; i < BUS_DCVS_COUNT; i++) {
-            char path[MAX_PATH_LEN];
-            snprintf(path, sizeof(path),
-                     "/sys/devices/system/cpu/bus_dcvs/%s", _bus_dcvs_comps[i]);
-            qcom_cpudcvs_min_perf(path);
-        }
-    }
-}
+void snapdragon_esport(void) { snapdragon_mode(1); }
+void snapdragon_balanced(void) { snapdragon_mode(2); }
+void snapdragon_efficiency(void) { snapdragon_mode(3); }

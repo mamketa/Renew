@@ -13,98 +13,134 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+ 
+#include "velfox_common.h"
 
-#include "utility_utils.h"
-
-int node_exists(const char *path) {
-    if (!path) return 0;
-    return access(path, F_OK) == 0;
-}
-
-const char *probe_paths(const char *const *paths, int count) {
-    for (int i = 0; i < count; i++) {
-        if (paths[i] && access(paths[i], F_OK) == 0)
-            return paths[i];
-    }
-    return NULL;
+int file_exists(const char *path) {
+    return path && access(path, F_OK) == 0;
 }
 
 int read_int_from_file(const char *path) {
-    FILE *fp = fopen(path, "r");
+    FILE *fp = path ? fopen(path, "r") : NULL;
     if (!fp) return 0;
     int value = 0;
-    if (fscanf(fp, "%d", &value) != 1)
-        value = 0;
+    if (fscanf(fp, "%d", &value) != 1) value = 0;
     fclose(fp);
     return value;
 }
 
 void read_string_from_file(char *buffer, size_t size, const char *path) {
-    FILE *fp = fopen(path, "r");
+    if (!buffer || size == 0) return;
+    FILE *fp = path ? fopen(path, "r") : NULL;
     if (!fp) {
-        if (buffer && size > 0) buffer[0] = '\0';
+        buffer[0] = '\0';
         return;
     }
-    fgets(buffer, (int)size, fp);
+    if (!fgets(buffer, size, fp)) buffer[0] = '\0';
     buffer[strcspn(buffer, "\n")] = '\0';
     fclose(fp);
 }
 
-/*
- * Core write logic shared by safe_write / apply / write_file.
- * - Silent skip if node missing
- * - Skip if value already matches (avoids redundant syscalls)
- * - chmod(0644) only if initial fopen("w") fails
- * - Restores chmod(0444) after write
- */
-static int _do_write(const char *path, const char *value) {
-    if (!path || !value) return 0;
-    if (access(path, F_OK) != 0) return 0;
+static int mode_is_writable(mode_t mode) {
+    return (mode & 0222) != 0;
+}
 
-    char buf[256] = {0};
+static int write_value(const char *value, const char *path, int restore_readonly) {
+    if (!path || !value || access(path, F_OK) != 0) return 0;
+    char current[256] = {0};
     FILE *fp = fopen(path, "r");
     if (fp) {
-        if (fgets(buf, sizeof(buf), fp))
-            buf[strcspn(buf, "\n")] = '\0';
+        if (fgets(current, sizeof(current), fp)) {
+            current[strcspn(current, "\n")] = '\0';
+            if (strcmp(current, value) == 0) {
+                fclose(fp);
+                return 1;
+            }
+        }
         fclose(fp);
-        if (strcmp(buf, value) == 0)
-            return 1;
     }
-
+    struct stat st;
+    int have_stat = stat(path, &st) == 0;
+    mode_t old_mode = have_stat ? (st.st_mode & 0777) : 0;
     fp = fopen(path, "w");
-    if (!fp) {
+    if (!fp && (!have_stat || !mode_is_writable(old_mode))) {
         chmod(path, 0644);
         fp = fopen(path, "w");
-        if (!fp) return 0;
     }
-
+    if (!fp) return 0;
     int ret = fprintf(fp, "%s", value);
     fflush(fp);
     fclose(fp);
-    chmod(path, 0444);
-    return (ret >= 0) ? 1 : 0;
-}
-
-int safe_write(const char *path, const char *value) {
-    return _do_write(path, value);
+    if (restore_readonly) chmod(path, 0444);
+    else if (have_stat && !mode_is_writable(old_mode)) chmod(path, old_mode);
+    return ret >= 0;
 }
 
 int apply(const char *value, const char *path) {
-    return _do_write(path, value);
+    return write_value(value, path, 1);
 }
 
 int write_file(const char *value, const char *path) {
-    return _do_write(path, value);
+    return write_value(value, path, 0);
 }
 
 int apply_ll(long long value, const char *path) {
-    char str[50];
+    char str[64];
     snprintf(str, sizeof(str), "%lld", value);
-    return _do_write(path, str);
+    return apply(str, path);
 }
 
 int write_ll(long long value, const char *path) {
-    char str[50];
+    char str[64];
     snprintf(str, sizeof(str), "%lld", value);
-    return _do_write(path, str);
+    return write_file(str, path);
+}
+
+bool name_contains(const char *name, const char *needle) {
+    return name && needle && strstr(name, needle) != NULL;
+}
+
+bool name_starts_with(const char *name, const char *prefix) {
+    return name && prefix && strncmp(name, prefix, strlen(prefix)) == 0;
+}
+
+bool name_is_policy(const char *name, void *ctx) {
+    (void)ctx;
+    return name_starts_with(name, "policy") && isdigit((unsigned char)name[6]);
+}
+
+bool name_has_token(const char *name, void *ctx) {
+    const char *const *tokens = ctx;
+    if (!name || !tokens) return false;
+    for (size_t i = 0; tokens[i]; ++i) {
+        if (strstr(name, tokens[i])) return true;
+    }
+    return false;
+}
+
+int for_each_dir_entry(const char *dir, velfox_entry_matcher matcher, velfox_entry_handler handler, void *ctx) {
+    if (!dir || !handler) return 0;
+    DIR *dp = opendir(dir);
+    if (!dp) return 0;
+    int count = 0;
+    struct dirent *ent;
+    while ((ent = readdir(dp)) != NULL) {
+        const char *name = ent->d_name;
+        if (!name[0] || name[0] == '.') continue;
+        if (matcher && !matcher(name, ctx)) continue;
+        handler(dir, name, ctx);
+        ++count;
+    }
+    closedir(dp);
+    return count;
+}
+
+int path_join(char *out, size_t size, const char *dir, const char *name) {
+    if (!out || !dir || !name || size == 0) return 0;
+    return snprintf(out, size, "%s/%s", dir, name) < (int)size;
+}
+
+int path_join3(char *out, size_t size, const char *dir, const char *name, const char *leaf) {
+    if (!out || !dir || !name || !leaf || size == 0) return 0;
+    return snprintf(out, size, "%s/%s/%s", dir, name, leaf) < (int)size;
 }

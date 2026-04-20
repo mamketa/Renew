@@ -13,206 +13,92 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+ 
+#include "velfox_common.h"
+#include "velfox_cpufreq.h"
+#include "velfox_devfreq.h"
 
-#include "devfreq_utils.h"
-#include "cpu_utils.h"
-#include "utility_utils.h"
-
-/* Classify a devfreq entry name into a device class */
-static int _classify_devfreq(const char *name) {
-    if (strstr(name, "kgsl") || strstr(name, "mali") || strstr(name, ".gpu"))
-        return DEVFREQ_CLASS_GPU;
-    if (strstr(name, "mif") || strstr(name, "ddr") || strstr(name, "memlat") ||
-        strstr(name, "llcc") || strstr(name, "cpubw") || strstr(name, "cpu-bw") ||
-        strstr(name, "cpu-lat") || strstr(name, "kgsl-ddr-qos"))
-        return DEVFREQ_CLASS_MIF;
-    if (strstr(name, "int") || strstr(name, "bus_int") || strstr(name, "devfreq_int"))
-        return DEVFREQ_CLASS_INT;
-    if (strstr(name, "ufshc") || strstr(name, "mmc"))
-        return DEVFREQ_CLASS_UFS;
-    return DEVFREQ_CLASS_OTHER;
+static int set_devfreq_pair(const char *path, const char *max_node, const char *min_node, long max_freq, long min_freq, int persistent) {
+    if (!path || max_freq <= 0 || min_freq <= 0) return 0;
+    char max_path[MAX_PATH_LEN], min_path[MAX_PATH_LEN];
+    snprintf(max_path, sizeof(max_path), "%s/%s", path, max_node);
+    snprintf(min_path, sizeof(min_path), "%s/%s", path, min_node);
+    if (persistent) {
+        write_ll(max_freq, max_path);
+        write_ll(min_freq, min_path);
+    } else {
+        apply_ll(max_freq, max_path);
+        apply_ll(min_freq, min_path);
+    }
+    return 1;
 }
 
-int find_devfreq_devices(DevfreqDevice *out, int max) {
-    if (!out || max <= 0) return 0;
-    DIR *dir = opendir("/sys/class/devfreq");
-    if (!dir) return 0;
+static int devfreq_set(const char *path, int mode, int persistent) {
+    if (!path || !file_exists(path)) return 0;
+    char freq_path[MAX_PATH_LEN];
+    snprintf(freq_path, sizeof(freq_path), "%s/available_frequencies", path);
+    if (!file_exists(freq_path)) return 0;
+    long max_freq = get_max_freq(freq_path);
+    long min_freq = get_min_freq(freq_path);
+    long mid_freq = get_mid_freq(freq_path);
+    if (mode == 1) return set_devfreq_pair(path, "max_freq", "min_freq", max_freq, max_freq, persistent);
+    if (mode == 2) return set_devfreq_pair(path, "max_freq", "min_freq", max_freq, mid_freq, persistent);
+    if (mode == 3) return set_devfreq_pair(path, "max_freq", "min_freq", min_freq, min_freq, persistent);
+    return set_devfreq_pair(path, "max_freq", "min_freq", max_freq, min_freq, persistent);
+}
+
+int devfreq_max_perf(const char *path) { return devfreq_set(path, 1, 0); }
+int devfreq_mid_perf(const char *path) { return devfreq_set(path, 2, 0); }
+int devfreq_unlock(const char *path) { return devfreq_set(path, 0, 1); }
+int devfreq_min_perf(const char *path) { return devfreq_set(path, 3, 0); }
+
+static int qcom_cpudcvs_set(const char *path, int mode, int persistent) {
+    if (!path || !file_exists(path)) return 0;
+    char freq_path[MAX_PATH_LEN];
+    snprintf(freq_path, sizeof(freq_path), "%s/available_frequencies", path);
+    if (!file_exists(freq_path)) return 0;
+    long max_freq = get_max_freq(freq_path);
+    long min_freq = get_min_freq(freq_path);
+    long mid_freq = get_mid_freq(freq_path);
+    if (mode == 1) return set_devfreq_pair(path, "hw_max_freq", "hw_min_freq", max_freq, max_freq, persistent);
+    if (mode == 2) return set_devfreq_pair(path, "hw_max_freq", "hw_min_freq", max_freq, mid_freq, persistent);
+    if (mode == 3) return set_devfreq_pair(path, "hw_max_freq", "hw_min_freq", min_freq, min_freq, persistent);
+    return set_devfreq_pair(path, "hw_max_freq", "hw_min_freq", max_freq, min_freq, persistent);
+}
+
+int qcom_cpudcvs_max_perf(const char *path) { return qcom_cpudcvs_set(path, 1, 0); }
+int qcom_cpudcvs_mid_perf(const char *path) { return qcom_cpudcvs_set(path, 2, 0); }
+int qcom_cpudcvs_unlock(const char *path) { return qcom_cpudcvs_set(path, 0, 1); }
+int qcom_cpudcvs_min_perf(const char *path) { return qcom_cpudcvs_set(path, 3, 0); }
+
+static int parse_mtk_indices(const char *path, int *indices, int limit) {
+    FILE *fp = path ? fopen(path, "r") : NULL;
+    if (!fp) return 0;
+    char line[MAX_LINE_LEN];
     int count = 0;
-    struct dirent *ent;
-    while ((ent = readdir(dir)) != NULL && count < max) {
-        if (ent->d_name[0] == '.') continue;
-        snprintf(out[count].path, MAX_PATH_LEN,
-                 "/sys/class/devfreq/%s", ent->d_name);
-        out[count].devclass = _classify_devfreq(ent->d_name);
-        count++;
+    while (count < limit && fgets(line, sizeof(line), fp)) {
+        char *start = strchr(line, '[');
+        char *end = strchr(line, ']');
+        if (!start || !end || end <= start) continue;
+        char tmp[16];
+        int len = (int)(end - start - 1);
+        if (len <= 0 || len >= (int)sizeof(tmp)) continue;
+        memcpy(tmp, start + 1, (size_t)len);
+        tmp[len] = '\0';
+        indices[count++] = atoi(tmp);
     }
-    closedir(dir);
+    fclose(fp);
     return count;
 }
 
-int devfreq_max_perf(const char *path) {
-    if (!path || !node_exists(path)) return 0;
-    char freq_path[MAX_PATH_LEN];
-    snprintf(freq_path, sizeof(freq_path), "%s/available_frequencies", path);
-    if (!node_exists(freq_path)) return 0;
-    long max_freq = get_max_freq(freq_path);
-    if (max_freq <= 0) return 0;
-    char p[MAX_PATH_LEN];
-    snprintf(p, sizeof(p), "%s/max_freq", path);
-    apply_ll(max_freq, p);
-    snprintf(p, sizeof(p), "%s/min_freq", path);
-    apply_ll(max_freq, p);
-    return 1;
-}
-
-int devfreq_mid_perf(const char *path) {
-    if (!path || !node_exists(path)) return 0;
-    char freq_path[MAX_PATH_LEN];
-    snprintf(freq_path, sizeof(freq_path), "%s/available_frequencies", path);
-    if (!node_exists(freq_path)) return 0;
-    long max_freq = get_max_freq(freq_path);
-    long mid_freq = get_mid_freq(freq_path);
-    if (max_freq <= 0 || mid_freq <= 0) return 0;
-    char p[MAX_PATH_LEN];
-    snprintf(p, sizeof(p), "%s/max_freq", path);
-    apply_ll(max_freq, p);
-    snprintf(p, sizeof(p), "%s/min_freq", path);
-    apply_ll(mid_freq, p);
-    return 1;
-}
-
-int devfreq_min_perf(const char *path) {
-    if (!path || !node_exists(path)) return 0;
-    char freq_path[MAX_PATH_LEN];
-    snprintf(freq_path, sizeof(freq_path), "%s/available_frequencies", path);
-    if (!node_exists(freq_path)) return 0;
-    long freq = get_min_freq(freq_path);
-    if (freq <= 0) return 0;
-    char p[MAX_PATH_LEN];
-    snprintf(p, sizeof(p), "%s/min_freq", path);
-    apply_ll(freq, p);
-    snprintf(p, sizeof(p), "%s/max_freq", path);
-    apply_ll(freq, p);
-    return 1;
-}
-
-int devfreq_unlock(const char *path) {
-    if (!path || !node_exists(path)) return 0;
-    char freq_path[MAX_PATH_LEN];
-    snprintf(freq_path, sizeof(freq_path), "%s/available_frequencies", path);
-    if (!node_exists(freq_path)) return 0;
-    long max_freq = get_max_freq(freq_path);
-    long min_freq = get_min_freq(freq_path);
-    if (max_freq <= 0 || min_freq <= 0) return 0;
-    char p[MAX_PATH_LEN];
-    snprintf(p, sizeof(p), "%s/max_freq", path);
-    write_ll(max_freq, p);
-    snprintf(p, sizeof(p), "%s/min_freq", path);
-    write_ll(min_freq, p);
-    return 1;
-}
-
-int qcom_cpudcvs_max_perf(const char *path) {
-    if (!node_exists(path)) return 0;
-    char freq_path[MAX_PATH_LEN];
-    snprintf(freq_path, sizeof(freq_path), "%s/available_frequencies", path);
-    if (!node_exists(freq_path)) return 0;
-    long freq = get_max_freq(freq_path);
-    char p[MAX_PATH_LEN];
-    snprintf(p, sizeof(p), "%s/hw_max_freq", path);
-    apply_ll(freq, p);
-    snprintf(p, sizeof(p), "%s/hw_min_freq", path);
-    apply_ll(freq, p);
-    return 1;
-}
-
-int qcom_cpudcvs_mid_perf(const char *path) {
-    if (!node_exists(path)) return 0;
-    char freq_path[MAX_PATH_LEN];
-    snprintf(freq_path, sizeof(freq_path), "%s/available_frequencies", path);
-    if (!node_exists(freq_path)) return 0;
-    long max_freq = get_max_freq(freq_path);
-    long mid_freq = get_mid_freq(freq_path);
-    char p[MAX_PATH_LEN];
-    snprintf(p, sizeof(p), "%s/hw_max_freq", path);
-    apply_ll(max_freq, p);
-    snprintf(p, sizeof(p), "%s/hw_min_freq", path);
-    apply_ll(mid_freq, p);
-    return 1;
-}
-
-int qcom_cpudcvs_min_perf(const char *path) {
-    if (!node_exists(path)) return 0;
-    char freq_path[MAX_PATH_LEN];
-    snprintf(freq_path, sizeof(freq_path), "%s/available_frequencies", path);
-    if (!node_exists(freq_path)) return 0;
-    long freq = get_min_freq(freq_path);
-    char p[MAX_PATH_LEN];
-    snprintf(p, sizeof(p), "%s/hw_min_freq", path);
-    apply_ll(freq, p);
-    snprintf(p, sizeof(p), "%s/hw_max_freq", path);
-    apply_ll(freq, p);
-    return 1;
-}
-
-int qcom_cpudcvs_unlock(const char *path) {
-    if (!node_exists(path)) return 0;
-    char freq_path[MAX_PATH_LEN];
-    snprintf(freq_path, sizeof(freq_path), "%s/available_frequencies", path);
-    if (!node_exists(freq_path)) return 0;
-    long max_freq = get_max_freq(freq_path);
-    long min_freq = get_min_freq(freq_path);
-    char p[MAX_PATH_LEN];
-    snprintf(p, sizeof(p), "%s/hw_max_freq", path);
-    write_ll(max_freq, p);
-    snprintf(p, sizeof(p), "%s/hw_min_freq", path);
-    write_ll(min_freq, p);
-    return 1;
-}
-
 int mtk_gpufreq_minfreq_index(const char *path) {
-    if (!path) return 0;
-    FILE *fp = fopen(path, "r");
-    if (!fp) return 0;
-    char line[MAX_LINE_LEN];
-    int min_index = 0;
-    while (fgets(line, sizeof(line), fp)) {
-        char *start = strchr(line, '[');
-        char *end   = strchr(line, ']');
-        if (start && end && end > start) {
-            char tmp[16];
-            int len = (int)(end - start - 1);
-            if (len > 0 && len < (int)sizeof(tmp)) {
-                memcpy(tmp, start + 1, (size_t)len);
-                tmp[len] = '\0';
-                min_index = atoi(tmp);
-            }
-        }
-    }
-    fclose(fp);
-    return min_index;
+    int indices[MAX_OPP_COUNT];
+    int count = parse_mtk_indices(path, indices, MAX_OPP_COUNT);
+    return count > 0 ? indices[count - 1] : 0;
 }
 
 int mtk_gpufreq_midfreq_index(const char *path) {
-    if (!path) return 0;
-    FILE *fp = fopen(path, "r");
-    if (!fp) return 0;
-    char line[MAX_LINE_LEN];
     int indices[MAX_OPP_COUNT];
-    int count = 0;
-    while (fgets(line, sizeof(line), fp) && count < MAX_OPP_COUNT) {
-        char *start = strchr(line, '[');
-        char *end   = strchr(line, ']');
-        if (start && end && end > start) {
-            char tmp[16];
-            int len = (int)(end - start - 1);
-            if (len > 0 && len < (int)sizeof(tmp)) {
-                memcpy(tmp, start + 1, (size_t)len);
-                tmp[len] = '\0';
-                indices[count++] = atoi(tmp);
-            }
-        }
-    }
-    fclose(fp);
-    return (count > 0) ? indices[count / 2] : 0;
+    int count = parse_mtk_indices(path, indices, MAX_OPP_COUNT);
+    return count > 0 ? indices[count / 2] : 0;
 }

@@ -1,40 +1,47 @@
-/*
- * Copyright (C) 2025-2026 VelocityFox22
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+#ifndef VELFOX_COMMON_H
+#define VELFOX_COMMON_H
 
-#pragma once
-
+#include <ctype.h>
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
-#include <limits.h>
-#include <ctype.h>
-#include <dirent.h>
-#include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <errno.h>
+#include <unistd.h>
 
-#define MAX_PATH_LEN   256
-#define MAX_LINE_LEN   512
-#define MAX_OPP_COUNT  64
-#define MODULE_CONFIG  "/data/adb/modules/velfox/config"
+#define MODULE_CONFIG "/data/adb/.config/Velfox"
+#define MAX_PATH_LEN 256
+#define MAX_LINE_LEN 1024
+#define MAX_OPP_COUNT 50
 
-extern int  SOC;
-extern int  LITE_MODE;
-extern int  DEVICE_MITIGATION;
+extern int SOC;
+extern int LITE_MODE;
+extern int DEVICE_MITIGATION;
 extern char DEFAULT_CPU_GOV[50];
 extern char PPM_POLICY[512];
+
+typedef bool (*velfox_entry_matcher)(const char *name, void *ctx);
+typedef void (*velfox_entry_handler)(const char *dir, const char *name, void *ctx);
+
+int file_exists(const char *path);
+int read_int_from_file(const char *path);
+void read_string_from_file(char *buffer, size_t size, const char *path);
+int apply(const char *value, const char *path);
+int write_file(const char *value, const char *path);
+int apply_ll(long long value, const char *path);
+int write_ll(long long value, const char *path);
+bool name_contains(const char *name, const char *needle);
+bool name_starts_with(const char *name, const char *prefix);
+bool name_is_policy(const char *name, void *ctx);
+bool name_has_token(const char *name, void *ctx);
+int for_each_dir_entry(const char *dir, velfox_entry_matcher matcher, velfox_entry_handler handler, void *ctx);
+int path_join(char *out, size_t size, const char *dir, const char *name);
+int path_join3(char *out, size_t size, const char *dir, const char *name, const char *leaf);
+
+#endif

@@ -14,38 +14,50 @@
  * limitations under the License.
  */
 
-#include "soc_utils.h"
-#include "devfreq_utils.h"
-#include "gpu_utils.h"
-#include "utility_utils.h"
-#include "velfox_common.h"
+#include "velfox_soc.h"
+#include "velfox_devfreq.h"
 
-/*
- * Unisoc GPU lives in /sys/class/devfreq with a ".gpu" suffix.
- * Reuse find_gpu_path() which already handles this pattern.
- */
-static void _unisoc_gpu(int mode) {
-    const char *gpu = find_gpu_path();
-    if (!gpu) return;
+typedef struct { int mode; int once; } gpu_ctx;
 
-    if (mode == 1) {
-        if (LITE_MODE == 0) devfreq_max_perf(gpu);
-        else                devfreq_mid_perf(gpu);
-    } else if (mode == 2) {
-        devfreq_unlock(gpu);
-    } else {
-        devfreq_min_perf(gpu);
-    }
+static bool unisoc_gpu_name(const char *name, void *ctx) {
+    (void)ctx;
+    return name_contains(name, ".gpu");
 }
 
-void unisoc_esport(void) {
-    _unisoc_gpu(1);
+static void unisoc_gpu_handler(const char *dir, const char *name, void *ctx) {
+    gpu_ctx *data = ctx;
+    if (data->once) return;
+    char path[MAX_PATH_LEN];
+    if (!path_join(path, sizeof(path), dir, name)) return;
+    if (data->mode == 1) LITE_MODE == 0 ? devfreq_max_perf(path) : devfreq_mid_perf(path);
+    else if (data->mode == 2) devfreq_unlock(path);
+    else devfreq_min_perf(path);
+    data->once = 1;
 }
 
-void unisoc_balanced(void) {
-    _unisoc_gpu(2);
+static bool mali_name(const char *name, void *ctx) {
+    (void)ctx;
+    return name_contains(name, ".mali");
 }
 
-void unisoc_efficiency(void) {
-    _unisoc_gpu(3);
+static void mali_platform_handler(const char *dir, const char *name, void *ctx) {
+    int mode = *(int *)ctx;
+    char path[MAX_PATH_LEN];
+    if (path_join3(path, sizeof(path), dir, name, "power_policy")) apply(mode == 1 ? "always_on" : "coarse_demand", path);
+    if (path_join3(path, sizeof(path), dir, name, "dvfs_period")) apply(mode == 1 ? "1" : mode == 2 ? "16" : "32", path);
 }
+
+static void unisoc_latency(int mode) {
+    apply(mode == 1 ? "performance" : mode == 2 ? "simple_ondemand" : "powersave", "/sys/devices/platform/soc/soc:bus/devfreq/soc:bus:bus_latency/governor");
+}
+
+static void unisoc_mode(int mode) {
+    gpu_ctx ctx = {.mode = mode, .once = 0};
+    for_each_dir_entry("/sys/class/devfreq", unisoc_gpu_name, unisoc_gpu_handler, &ctx);
+    for_each_dir_entry("/sys/devices/platform", mali_name, mali_platform_handler, &(int){mode});
+    unisoc_latency(mode);
+}
+
+void unisoc_esport(void) { unisoc_mode(1); }
+void unisoc_balanced(void) { unisoc_mode(2); }
+void unisoc_efficiency(void) { unisoc_mode(3); }
