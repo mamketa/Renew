@@ -1,63 +1,128 @@
-#include "velfox_soc.h"
-#include "velfox_cpufreq.h"
-#include "velfox_devfreq.h"
+/*
+ * Copyright (C) 2025-2026 VelocityFox22
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-static void tune_exynos_kernel_gpu(int mode) {
-    const char *gpu_path = "/sys/kernel/gpu";
-    char avail_path[MAX_PATH_LEN];
-    snprintf(avail_path, sizeof(avail_path), "%s/gpu_available_frequencies", gpu_path);
-    if (!file_exists(avail_path)) return;
-    long max_freq = get_max_freq(avail_path);
-    long min_freq = get_min_freq(avail_path);
-    long mid_freq = get_mid_freq(avail_path);
-    char max_clock_path[MAX_PATH_LEN];
-    char min_clock_path[MAX_PATH_LEN];
-    snprintf(max_clock_path, sizeof(max_clock_path), "%s/gpu_max_clock", gpu_path);
-    snprintf(min_clock_path, sizeof(min_clock_path), "%s/gpu_min_clock", gpu_path);
-    if (mode == 1) {
-        write_ll(max_freq, max_clock_path);
-        write_ll(LITE_MODE == 1 && mid_freq > 0 ? mid_freq : max_freq, min_clock_path);
-    } else if (mode == 2) {
-        write_ll(max_freq, max_clock_path);
-        write_ll(min_freq, min_clock_path);
-    } else {
-        long target = mid_freq > 0 ? mid_freq : min_freq;
-        write_ll(target, max_clock_path);
-        write_ll(min_freq > 0 ? min_freq : target, min_clock_path);
+#include "soc_utils.h"
+#include "cpu_utils.h"
+#include "devfreq_utils.h"
+#include "gpu_utils.h"
+#include "utility_utils.h"
+#include "velfox_common.h"
+
+/* Shared helper: apply a power policy to the first detected Mali platform device */
+static void _mali_power_policy(const char *policy) {
+    const char *mali = find_mali_platform_path();
+    if (!mali) return;
+    char path[MAX_PATH_LEN];
+    snprintf(path, sizeof(path), "%s/power_policy", mali);
+    apply(policy, path);
+}
+
+/* Shared: apply devfreq action on all devfreq_mif entries */
+static void _mif_devfreq(int mode) {
+    DIR *dir = opendir("/sys/class/devfreq");
+    if (!dir) return;
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (!strstr(ent->d_name, "devfreq_mif")) continue;
+        char path[MAX_PATH_LEN];
+        snprintf(path, sizeof(path), "/sys/class/devfreq/%s", ent->d_name);
+        if (mode == 1)       devfreq_max_perf(path);
+        else if (mode == 2)  devfreq_mid_perf(path);
+        else if (mode == 3)  devfreq_min_perf(path);
+        else                 devfreq_unlock(path);
+    }
+    closedir(dir);
+}
+
+void exynos_esport(void) {
+    /* Exynos GPU via /sys/kernel/gpu */
+    const char *gpu = "/sys/kernel/gpu";
+    if (node_exists(gpu)) {
+        char avail[MAX_PATH_LEN];
+        snprintf(avail, sizeof(avail), "%s/gpu_available_frequencies", gpu);
+        long max_freq = get_max_freq(avail);
+
+        char p[MAX_PATH_LEN];
+        snprintf(p, sizeof(p), "%s/gpu_max_clock", gpu);
+        apply_ll(max_freq, p);
+
+        snprintf(p, sizeof(p), "%s/gpu_min_clock", gpu);
+        if (LITE_MODE == 1) {
+            long mid_freq = get_mid_freq(avail);
+            apply_ll(mid_freq, p);
+        } else {
+            apply_ll(max_freq, p);
+        }
+    }
+
+    /* Mali power policy: always_on for esport */
+    _mali_power_policy("always_on");
+
+    /* DRAM and bus frequency */
+    if (DEVICE_MITIGATION == 0) {
+        if (LITE_MODE == 1)
+            _mif_devfreq(2);
+        else
+            _mif_devfreq(1);
     }
 }
 
-static int mali_policy_cb(const char *entry_path, const char *entry_name, void *userdata) {
-    if (!strstr(entry_name, ".mali") && !strstr(entry_name, "mali")) return 0;
-    int mode = *((int *)userdata);
-    char path[MAX_PATH_LEN];
-    if (!path_join(path, sizeof(path), entry_path, "power_policy")) return 0;
-    if (mode == 1) return write_sysfs(path, "always_on");
-    return write_sysfs(path, "coarse_demand");
+void exynos_balanced(void) {
+    /* Exynos GPU: unlock */
+    const char *gpu = "/sys/kernel/gpu";
+    if (node_exists(gpu)) {
+        char avail[MAX_PATH_LEN];
+        snprintf(avail, sizeof(avail), "%s/gpu_available_frequencies", gpu);
+        long max_freq = get_max_freq(avail);
+        long min_freq = get_min_freq(avail);
+
+        char p[MAX_PATH_LEN];
+        snprintf(p, sizeof(p), "%s/gpu_max_clock", gpu);
+        write_ll(max_freq, p);
+        snprintf(p, sizeof(p), "%s/gpu_min_clock", gpu);
+        write_ll(min_freq, p);
+    }
+
+    /* Mali: coarse demand for balanced */
+    _mali_power_policy("coarse_demand");
+
+    /* DRAM: unlock */
+    if (DEVICE_MITIGATION == 0)
+        _mif_devfreq(0);
 }
 
-static int exynos_mif_cb(const char *entry_path, const char *entry_name, void *userdata) {
-    if (!strstr(entry_name, "devfreq_mif") && !strstr(entry_name, "mif")) return 0;
-    int mode = *((int *)userdata);
-    if (mode == 1) return LITE_MODE == 1 ? devfreq_mid_perf(entry_path) : devfreq_max_perf(entry_path);
-    if (mode == 2) return devfreq_unlock(entry_path);
-    return devfreq_mid_perf(entry_path);
-}
+void exynos_efficiency(void) {
+    /* GPU: minimum frequency */
+    const char *gpu = "/sys/kernel/gpu";
+    if (node_exists(gpu)) {
+        char avail[MAX_PATH_LEN];
+        snprintf(avail, sizeof(avail), "%s/gpu_available_frequencies", gpu);
+        long min_freq = get_min_freq(avail);
 
-static void tune_exynos_common(int mode) {
-    tune_exynos_kernel_gpu(mode);
-    iterate_sysfs_nodes("/sys/devices/platform", NULL, mali_policy_cb, &mode);
-    if (DEVICE_MITIGATION == 0) iterate_sysfs_nodes("/sys/class/devfreq", NULL, exynos_mif_cb, &mode);
-}
+        char p[MAX_PATH_LEN];
+        snprintf(p, sizeof(p), "%s/gpu_min_clock", gpu);
+        apply_ll(min_freq, p);
+        snprintf(p, sizeof(p), "%s/gpu_max_clock", gpu);
+        apply_ll(min_freq, p);
+    }
 
-void exynos_esport() {
-    tune_exynos_common(1);
-}
+    /* Mali: adaptive for power saving */
+    _mali_power_policy("adaptive");
 
-void exynos_balanced() {
-    tune_exynos_common(2);
-}
-
-void exynos_efficiency() {
-    tune_exynos_common(3);
+    /* DRAM: minimum */
+    if (DEVICE_MITIGATION == 0)
+        _mif_devfreq(3);
 }

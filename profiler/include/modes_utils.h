@@ -16,25 +16,19 @@
 
 #pragma once
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
-#include <limits.h>
-#include <ctype.h>
-#include <dirent.h>
-#include <unistd.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <errno.h>
+#include "velfox_common.h"
 
-#define MAX_PATH_LEN   256
-#define MAX_LINE_LEN   512
-#define MAX_OPP_COUNT  64
-#define MODULE_CONFIG  "/data/adb/modules/velfox/config"
+/* Load all configuration from MODULE_CONFIG */
+void read_configs(void);
 
-extern int  SOC;
-extern int  LITE_MODE;
-extern int  DEVICE_MITIGATION;
-extern char DEFAULT_CPU_GOV[50];
-extern char PPM_POLICY[512];
+/* DnD control (0 = off, 1 = priority) */
+void set_dnd(int mode);
+
+/* RPS/XPS tuning (mode: 1=perf, 2=balanced, 3=efficiency) */
+void set_rps_xps(int mode);
+
+/* Profile orchestration — ordered execution of all subsystems */
+void perfcommon(void);
+void esport_mode(void);
+void balanced_mode(void);
+void efficiency_mode(void);

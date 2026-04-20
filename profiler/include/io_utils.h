@@ -16,25 +16,10 @@
 
 #pragma once
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
-#include <limits.h>
-#include <ctype.h>
-#include <dirent.h>
-#include <unistd.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <errno.h>
+/* Common I/O baseline (iostats off, add_random off) */
+void io_common(void);
 
-#define MAX_PATH_LEN   256
-#define MAX_LINE_LEN   512
-#define MAX_OPP_COUNT  64
-#define MODULE_CONFIG  "/data/adb/modules/velfox/config"
-
-extern int  SOC;
-extern int  LITE_MODE;
-extern int  DEVICE_MITIGATION;
-extern char DEFAULT_CPU_GOV[50];
-extern char PPM_POLICY[512];
+/* Per-profile I/O tuning */
+void io_tune_esport(void);
+void io_tune_balanced(void);
+void io_tune_efficiency(void);

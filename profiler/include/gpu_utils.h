@@ -16,25 +16,20 @@
 
 #pragma once
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
-#include <limits.h>
-#include <ctype.h>
-#include <dirent.h>
-#include <unistd.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <errno.h>
+#include "velfox_common.h"
 
-#define MAX_PATH_LEN   256
-#define MAX_LINE_LEN   512
-#define MAX_OPP_COUNT  64
-#define MODULE_CONFIG  "/data/adb/modules/velfox/config"
+/* GPU path discovery — returns a static internal buffer or NULL */
+const char *find_gpu_path(void);
 
-extern int  SOC;
-extern int  LITE_MODE;
-extern int  DEVICE_MITIGATION;
-extern char DEFAULT_CPU_GOV[50];
-extern char PPM_POLICY[512];
+/*
+ * find_mali_platform_path:
+ * Scans /sys/devices/platform for *.mali entries.
+ * Returns pointer to static buffer, or NULL.
+ */
+const char *find_mali_platform_path(void);
+
+/* Generic GPU devfreq helpers (work with kgsl-3d0/devfreq, mali devfreq, etc.) */
+int gpu_max_perf(const char *gpu_devfreq_path);
+int gpu_mid_perf(const char *gpu_devfreq_path);
+int gpu_min_perf(const char *gpu_devfreq_path);
+int gpu_unlock(const char *gpu_devfreq_path);

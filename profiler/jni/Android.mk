@@ -4,20 +4,23 @@ include $(CLEAR_VARS)
 LOCAL_MODULE      := velfox_profiler
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_PATH := $(TARGET_OUT_EXECUTABLES)
-
+    
 LOCAL_SRC_FILES := \
     ../main.c \
     ../src/utility_utils.c \
-    ../src/cpufreq_utils.c \
-    ../src/devreq_utils.c \
+    ../src/cpu_utils.c \
+    ../src//gpu_utils.c \
+    ../src/devfreq_utils.c \
     ../src/memory_utils.c \
-    ../src/network_utils.c \
+    ../src/io_utils.c \
+    ../src/scheduler_utils.c \
     ../src/modes_utils.c \
+    ../src/soc_dispatch.c \
     ../src/velfox_mediatek.c \
     ../src/velfox_snapdragon.c \
     ../src/velfox_exynos.c \
-    ../src/velfox_unisoc.c \
-    ../src/velfox_tensor.c
+    ../src/velfox_tensor.c \
+    ../src/velfox_unisoc.c
 
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/../include
 
